@@ -111,11 +111,14 @@ import org.eclipse.tracecompass.internal.tmf.ui.Activator;
 import org.eclipse.tracecompass.internal.tmf.ui.Messages;
 import org.eclipse.tracecompass.internal.tmf.ui.commands.ExportToTextCommandHandler;
 import org.eclipse.tracecompass.internal.tmf.ui.dialogs.MultiLineInputDialog;
+import org.eclipse.tracecompass.statesystem.core.ITmfStateSystem;
+import org.eclipse.tracecompass.statesystem.core.exceptions.AttributeNotFoundException;
 import org.eclipse.tracecompass.tmf.core.component.ITmfEventProvider;
 import org.eclipse.tracecompass.tmf.core.component.TmfComponent;
 import org.eclipse.tracecompass.tmf.core.event.ITmfEvent;
 import org.eclipse.tracecompass.tmf.core.event.aspect.ITmfEventAspect;
 import org.eclipse.tracecompass.tmf.core.event.aspect.TmfEventFieldAspect;
+import org.eclipse.tracecompass.tmf.core.event.aspect.TmfStateSystemAspect;
 import org.eclipse.tracecompass.tmf.core.event.collapse.ITmfCollapsibleEvent;
 import org.eclipse.tracecompass.tmf.core.event.lookup.ITmfCallsite;
 import org.eclipse.tracecompass.tmf.core.event.lookup.ITmfModelLookup;
@@ -420,35 +423,7 @@ public class TmfEventsTable extends TmfComponent implements IGotoMarker, IColorS
 
         // Create the UI columns in the table
         for (TmfEventTableColumn col : fColumns) {
-            TableColumn column = fTable.newTableColumn(SWT.LEFT);
-            column.setText(col.getHeaderName());
-            column.setToolTipText(col.getHeaderTooltip());
-            column.setData(Key.ASPECT, col.getEventAspect());
-            column.pack();
-            if (col instanceof TmfMarginColumn) {
-                column.setResizable(false);
-                column.addControlListener(new ControlAdapter() {
-                    /*
-                     * Make sure that the margin column is always first
-                     */
-                    @Override
-                    public void controlMoved(ControlEvent e) {
-                        int[] order = fTable.getColumnOrder();
-                        if (order[0] == MARGIN_COLUMN_INDEX) {
-                            return;
-                        }
-                        for (int i = order.length - 1; i > 0; i--) {
-                            if (order[i] == MARGIN_COLUMN_INDEX) {
-                                order[i] = order[i - 1];
-                                order[i - 1] = MARGIN_COLUMN_INDEX;
-                            }
-                        }
-                        fTable.setColumnOrder(order);
-                    }
-                });
-            } else {
-                column.setMoveable(true);
-            }
+            createColumn(col);
         }
 
         // Set the frozen row for header row
@@ -687,6 +662,41 @@ public class TmfEventsTable extends TmfComponent implements IGotoMarker, IColorS
     // ------------------------------------------------------------------------
 
     /**
+     * Add a column to this event table
+     */
+    private void createColumn(TmfEventTableColumn col) {
+        TableColumn column = fTable.newTableColumn(SWT.LEFT);
+        column.setText(col.getHeaderName());
+        column.setToolTipText(col.getHeaderTooltip());
+        column.setData(Key.ASPECT, col.getEventAspect());
+        column.pack();
+        if (col instanceof TmfMarginColumn) {
+            column.setResizable(false);
+            column.addControlListener(new ControlAdapter() {
+                /*
+                 * Make sure that the margin column is always first
+                 */
+                @Override
+                public void controlMoved(ControlEvent e) {
+                    int[] order = fTable.getColumnOrder();
+                    if (order[0] == MARGIN_COLUMN_INDEX) {
+                        return;
+                    }
+                    for (int i = order.length - 1; i > 0; i--) {
+                        if (order[i] == MARGIN_COLUMN_INDEX) {
+                            order[i] = order[i - 1];
+                            order[i - 1] = MARGIN_COLUMN_INDEX;
+                        }
+                    }
+                    fTable.setColumnOrder(order);
+                }
+            });
+        } else {
+            column.setMoveable(true);
+        }
+    }
+
+    /**
      * Create a pop-up menu.
      */
     protected void createPopupMenu() {
@@ -905,6 +915,30 @@ public class TmfEventsTable extends TmfComponent implements IGotoMarker, IColorS
             }
         };
 
+        final IAction addStatesystemAspectColumn = new Action("Create State System Query...") { //$NON-NLS-1$
+            @Override
+            public void run() {
+                ITmfTrace trace = TmfTraceManager.getInstance().getActiveTrace();
+                StateSystemAttributeSelectionDialog dialog =
+                        new StateSystemAttributeSelectionDialog(fTable.getShell(), trace);
+                if (dialog.open() != Window.OK) {
+                    /* Operation was cancelled by the user */
+                    return;
+                }
+                Object[] results = dialog.getResult();
+                ITmfStateSystem ss = (ITmfStateSystem) results[0];
+                if (ss == null) {
+                    /* Nothing was selected in the dialog */
+                    return;
+                }
+                String attribute = (String) results[1];
+
+                addStateSystemAspectColumn(ss, attribute);
+            }
+        };
+
+
+
         class ToggleBookmarkAction extends Action {
             Long fRank;
 
@@ -1026,6 +1060,9 @@ public class TmfEventsTable extends TmfComponent implements IGotoMarker, IColorS
                     tablePopupMenu.add(subMenu);
                 }
                 appendToTablePopupMenu(tablePopupMenu, item);
+
+                tablePopupMenu.add(new Separator());
+                tablePopupMenu.add(addStatesystemAspectColumn);
             }
         });
 
@@ -1053,6 +1090,20 @@ public class TmfEventsTable extends TmfComponent implements IGotoMarker, IColorS
         fRawViewer.setMenu(menu);
     }
 
+    private void addStateSystemAspectColumn(@NonNull ITmfStateSystem ss, String attributePath) {
+        int quark;
+        try {
+            quark = ss.getQuarkAbsolute(attributePath.split("/")); //$NON-NLS-1$
+        } catch (AttributeNotFoundException e) {
+            /* Invalid quark, cancel operation */
+            return;
+        }
+        ITmfEventAspect aspect = new TmfStateSystemAspect(null, ss, quark);
+        TmfEventTableColumn col = new TmfEventTableColumn(aspect);
+        fColumns.add(col);
+        createColumn(col);
+        refresh();
+    }
 
     /**
      * Append an item to the event table's pop-up menu.
